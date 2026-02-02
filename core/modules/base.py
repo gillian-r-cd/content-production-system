@@ -3,6 +3,8 @@
 # 主要类：BaseModule
 # 核心能力：定义模块通用接口、依赖注入、上下文管理
 
+from __future__ import annotations
+
 from abc import ABC, abstractmethod
 from typing import Any, Dict, List, Optional, TypeVar
 from core.ai_client import AIClient, MockAIClient

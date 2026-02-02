@@ -255,7 +255,7 @@ function EditableList({
 }
 
 export default function CoreDesignStage() {
-  const { workflowData, selectScheme, isLoading, updateScheme, workflowId, refreshData } = useWorkflowStore()
+  const { workflowData, selectScheme, isLoading, updateScheme, workflowId, refreshData, regenerateSchemes } = useWorkflowStore()
   const [selectedIndex, setSelectedIndex] = useState<number>(
     workflowData?.content_core?.selected_scheme_index ?? 0
   )
@@ -373,10 +373,20 @@ export default function CoreDesignStage() {
       {/* 左侧：方案目录 */}
       <div className="w-64 border-r bg-muted/20 flex flex-col">
         <div className="p-4 border-b">
-          <h2 className="font-semibold flex items-center gap-2">
-            <Lightbulb className="w-5 h-5 text-primary" />
-            设计方案
-          </h2>
+          <div className="flex items-center justify-between">
+            <h2 className="font-semibold flex items-center gap-2">
+              <Lightbulb className="w-5 h-5 text-primary" />
+              设计方案
+            </h2>
+            <button
+              onClick={() => regenerateSchemes()}
+              disabled={isLoading}
+              className="p-1.5 text-muted-foreground hover:text-primary hover:bg-muted rounded transition-colors"
+              title="重新生成方案"
+            >
+              <RotateCcw className={cn("w-4 h-4", isLoading && "animate-spin")} />
+            </button>
+          </div>
           <p className="text-xs text-muted-foreground mt-1">
             共 {localSchemes.length} 个方案
           </p>

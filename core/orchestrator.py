@@ -3,6 +3,8 @@
 # 主要类：Orchestrator, ProjectState
 # 核心能力：状态管理、模块调度、自迭代控制、人机交互
 
+from __future__ import annotations
+
 from typing import Any, Dict, List, Optional, Callable, Literal
 from pathlib import Path
 from datetime import datetime
@@ -277,13 +279,16 @@ class Orchestrator:
                 state.ai_call_count += 1
                 if force_result.success and force_result.data:
                     state.intent = force_result.data
-                    state.current_stage = "research"
-                    state.project.status = "research"
                     state.project.intent_id = state.intent.id
+                    # 清理临时数据
                     state.raw_intent_input = None
                     state.clarification_history = None
                     state.clarification_count = 0
-                    self._emit("stage_changed", {"stage": "research"})
+                    # ✅ 修复：即使达到追问上限，也等待用户确认意图再进入下一阶段
+                    state.waiting_for_input = True
+                    state.input_prompt = "意图分析已完成，请确认后进入消费者调研阶段。"
+                    state.input_callback = "confirm_intent"
+                    self._emit("intent_ready", {"intent": state.intent})
                 return state
             
             # 继续追问，显示进度
@@ -303,6 +308,9 @@ class Orchestrator:
             state.raw_intent_input = None
             state.clarification_history = None
             state.clarification_count = 0
+            
+            # ✅ 设置意图上下文到 context_manager
+            self.context_manager.set_stage_context("intent", state.intent)
             
             # ✅ 等待用户确认意图，而不是直接进入下一阶段
             state.waiting_for_input = True
@@ -334,6 +342,9 @@ class Orchestrator:
         if result.success:
             state.consumer_research = result.data
             state.project.consumer_research_id = state.consumer_research.id
+            
+            # ✅ 设置消费者调研上下文到 context_manager
+            self.context_manager.set_stage_context("consumer_research", state.consumer_research)
             
             # ✅ 等待用户确认调研结果，而不是直接进入下一阶段
             state.waiting_for_input = True
@@ -393,9 +404,39 @@ class Orchestrator:
             scheme_index = input_data.get("scheme_index", 0)
             if state.content_core:
                 state.content_core.selected_scheme_index = scheme_index
-                state.content_core.status = "field_production"
+                # 选择方案后，进入目录编辑阶段，而不是直接开始生产
+                state.content_core.status = "outline_editing"
                 state.current_stage = "core_production"
                 state.project.status = "core_production"
+                
+                # 初始化目录结构（如果还没有）
+                if not state.content_core.sections and state.field_schema:
+                    from core.models import ContentSection, ContentField
+                    # 创建默认章节
+                    section = ContentSection(
+                        id="section_default",
+                        name="新章节",
+                        description="",
+                        order=0,
+                        fields=[]
+                    )
+                    # 从字段模板创建字段
+                    for i, field_def in enumerate(state.field_schema.get_ordered_fields()):
+                        section.fields.append(ContentField(
+                            id=f"field_{field_def.name}_{i}",
+                            name=field_def.name,
+                            display_name=field_def.name,
+                            description=field_def.description,
+                            order=i,
+                            status="pending",
+                        ))
+                    state.content_core.sections = [section]
+                
+                # 设置等待用户确认目录结构
+                state.waiting_for_input = True
+                state.input_prompt = "方案已选择，请在左侧编辑目录结构后点击「确认目录结构」开始生产"
+                state.input_callback = "confirm_outline"
+                
                 self._emit("stage_changed", {"stage": "core_production"})
         
         return state
@@ -424,10 +465,16 @@ class Orchestrator:
                     status="pending",
                 ))
         
-        # 获取下一个待处理字段
-        pending_fields = state.content_core.get_pending_fields()
+        # 获取下一个待处理字段（优先处理 generating 状态的，然后是 pending）
+        # 这样可以恢复卡住的生成任务
+        all_fields = state.content_core.get_all_fields()
+        generating_fields = [f for f in all_fields if f.status == "generating"]
+        pending_fields = [f for f in all_fields if f.status == "pending"]
         
-        if not pending_fields:
+        # 优先恢复 generating 状态的字段
+        next_fields = generating_fields if generating_fields else pending_fields
+        
+        if not next_fields:
             # 所有字段完成，进入外延阶段
             state.content_core.status = "completed"
             state.current_stage = "extension"
@@ -436,8 +483,30 @@ class Orchestrator:
             self._emit("stage_changed", {"stage": "extension"})
             return state
         
-        current_field = pending_fields[0]
-        state.current_field = current_field.name
+        current_field = next_fields[0]
+        # 保存字段ID，用于精确查找（跨章节可能有同名字段）
+        state.current_field = current_field.id  # 使用 ID 而不是名称
+        
+        # ========== 检查生成前提问（clarification_prompt）==========
+        # 从 field_schema 获取字段定义
+        field_def = None
+        if state.field_schema:
+            field_def = state.field_schema.get_field(current_field.name)
+        
+        # 如果有生成前提问且用户还没回答，等待用户输入
+        if field_def and field_def.clarification_prompt and not current_field.clarification_answer:
+            state.waiting_for_input = True
+            # 不设置 input_prompt，避免问题出现在右侧对话框
+            # 弹窗从 API 响应的 clarification 字段获取问题（从 field_schema 获取）
+            state.input_prompt = None
+            state.input_callback = "field_clarification"
+            # 不标记为 generating，保持 pending 状态
+            self._emit("clarification_needed", {
+                "field_id": current_field.id,
+                "field_name": current_field.name,
+                "question": field_def.clarification_prompt,
+            })
+            return state
         
         # 标记字段为生成中
         current_field.status = "generating"
@@ -449,7 +518,7 @@ class Orchestrator:
             if scheme_idx < len(state.content_core.design_schemes):
                 selected_scheme = state.content_core.design_schemes[scheme_idx]
         
-        # 生产字段 - 使用设计方案作为额外上下文
+        # 生产字段 - 使用设计方案作为额外上下文，包含用户的澄清回答
         result = producer.run({
             "action": "produce_field",
             "content_core": state.content_core,
@@ -462,8 +531,8 @@ class Orchestrator:
         
         if result.success:
             content = result.data.get("content", "")
-            # 更新字段状态
-            field = state.content_core.get_field(current_field.name)
+            # 更新字段状态 - 使用字段ID精确查找（因为跨章节可能有同名字段）
+            field = state.content_core.get_field(state.current_field)
             if field:
                 field.content = content
                 field.status = "completed"
@@ -569,7 +638,18 @@ class Orchestrator:
         state.input_prompt = None
         state.input_callback = None
         
+        # 如果 callback 为空但在 intent 阶段，推断用户意图
+        if not callback and state.current_stage == "intent":
+            if not state.intent:
+                callback = "intent_input"
+            else:
+                callback = "confirm_intent"
+        
         if callback == "intent_input":
+            # 用户输入作为 raw_input
+            answer = input_data.get("answer", "")
+            if answer:
+                return self._run_intent_stage(state, {"raw_input": answer})
             return self._run_intent_stage(state, input_data)
         
         elif callback == "intent_clarification":
@@ -603,6 +683,25 @@ class Orchestrator:
             self._emit("stage_changed", {"stage": "core_design"})
             # 自动开始生成设计方案
             return self._run_core_design_stage(state, {"action": "generate_schemes"})
+        
+        elif callback == "confirm_outline":
+            # 用户确认目录结构，开始生产
+            if state.content_core:
+                state.content_core.outline_confirmed = True
+                state.content_core.status = "field_production"
+            # 继续到内涵生产阶段
+            return self._run_core_production_stage(state, {})
+        
+        elif callback == "field_clarification":
+            # 用户回答了字段生成前的问题
+            answer = input_data.get("answer", "")
+            # 保存回答到当前字段
+            if state.current_field and state.content_core:
+                field = state.content_core.get_field(state.current_field)
+                if field:
+                    field.clarification_answer = answer
+            # 继续生成字段
+            return self._run_core_production_stage(state, {})
         
         elif callback == "scheme_selection":
             scheme_index = int(input_data.get("answer", "1")) - 1
@@ -730,9 +829,17 @@ class Orchestrator:
         if ext_file.exists():
             content_extension = ContentExtension.load(ext_file)
         
-        # 如果 content_core 存在但 fields 为空，使用默认 schema 初始化
+        # 加载项目关联的 FieldSchema（关键！用于注入 ai_hint 到生成提示词）
         field_schema = None
-        if content_core and not content_core.fields:
+        if project.field_schema_id:
+            # 从存储路径加载用户配置的字段模板
+            schema_path = Path(self.config.storage_base_path) / "field_schemas" / f"{project.field_schema_id}.yaml"
+            if schema_path.exists():
+                from core.models import FieldSchema
+                field_schema = FieldSchema.load(schema_path)
+        
+        # 如果没有关联 field_schema 且 content_core 存在但 fields 为空，使用默认 schema
+        if field_schema is None and content_core and not content_core.fields:
             field_schema = create_default_field_schema()
             for field_def in field_schema.fields:
                 content_core.fields.append(ContentField(
@@ -793,6 +900,18 @@ class Orchestrator:
             input_prompt=input_prompt,
             input_callback=input_callback,
         )
+        
+        # ✅ 恢复 context_manager 的阶段上下文
+        if intent:
+            self.context_manager.set_stage_context("intent", intent)
+        if consumer_research:
+            self.context_manager.set_stage_context("consumer_research", consumer_research)
+        if content_core:
+            self.context_manager.set_stage_context("content_core", content_core)
+        if content_extension:
+            self.context_manager.set_stage_context("content_extension", content_extension)
+        if creator_profile:
+            self.context_manager.set_creator_profile(creator_profile)
         
         return state
 

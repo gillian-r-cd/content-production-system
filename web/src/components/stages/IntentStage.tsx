@@ -1,9 +1,9 @@
 // web/src/components/stages/IntentStage.tsx
 // 意图分析阶段
-// 功能：展示和编辑意图分析结果
+// 功能：展示和编辑意图分析结果，支持每一条内容的单独编辑
 
-import { useState, useEffect } from 'react'
-import { Target, Plus, X, Pencil, Check, RotateCcw } from 'lucide-react'
+import { useState, useEffect, useRef } from 'react'
+import { Target, Plus, X, Pencil, Check, RotateCcw, Save } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useWorkflowStore } from '@/stores/workflowStore'
 
@@ -18,6 +18,11 @@ export default function IntentStage() {
   const [localMustHave, setLocalMustHave] = useState<string[]>(intent?.constraints?.must_have || [])
   const [localMustAvoid, setLocalMustAvoid] = useState<string[]>(intent?.constraints?.must_avoid || [])
   const [newItem, setNewItem] = useState('')
+  
+  // 行内编辑状态
+  const [editingItemIndex, setEditingItemIndex] = useState<{ field: string; index: number } | null>(null)
+  const [editingItemValue, setEditingItemValue] = useState('')
+  const editInputRef = useRef<HTMLInputElement>(null)
 
   // 同步远程数据到本地
   useEffect(() => {
@@ -85,6 +90,54 @@ export default function IntentStage() {
         setLocalMustAvoid(localMustAvoid.filter((_, i) => i !== index))
         break
     }
+  }
+
+  // 开始编辑某一条内容
+  const startEditItem = (field: string, index: number, currentValue: string) => {
+    setEditingItemIndex({ field, index })
+    setEditingItemValue(currentValue)
+    setTimeout(() => editInputRef.current?.focus(), 0)
+  }
+
+  // 保存单条编辑
+  const saveEditItem = async () => {
+    if (!editingItemIndex) return
+    
+    const { field, index } = editingItemIndex
+    const value = editingItemValue.trim()
+    
+    if (!value) {
+      // 空值时删除该项
+      handleRemoveItem(field as 'criteria' | 'mustHave' | 'mustAvoid', index)
+    } else {
+      // 更新该项
+      switch (field) {
+        case 'criteria':
+          const newCriteria = [...localCriteria]
+          newCriteria[index] = value
+          setLocalCriteria(newCriteria)
+          break
+        case 'mustHave':
+          const newMustHave = [...localMustHave]
+          newMustHave[index] = value
+          setLocalMustHave(newMustHave)
+          break
+        case 'mustAvoid':
+          const newMustAvoid = [...localMustAvoid]
+          newMustAvoid[index] = value
+          setLocalMustAvoid(newMustAvoid)
+          break
+      }
+    }
+    
+    setEditingItemIndex(null)
+    setEditingItemValue('')
+  }
+
+  // 取消单条编辑
+  const cancelEditItem = () => {
+    setEditingItemIndex(null)
+    setEditingItemValue('')
   }
 
   const handleConfirm = () => {
@@ -174,13 +227,48 @@ export default function IntentStage() {
           {localCriteria.map((item, index) => (
             <div key={index} className="flex items-center gap-2 px-4 py-2 bg-muted/50 rounded-lg group">
               <span className="text-primary">•</span>
-              <span className="flex-1">{item}</span>
-              <button
-                onClick={() => handleRemoveItem('criteria', index)}
-                className="opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-error transition-opacity"
-              >
-                <X className="w-4 h-4" />
-              </button>
+              {editingItemIndex?.field === 'criteria' && editingItemIndex?.index === index ? (
+                <>
+                  <input
+                    ref={editInputRef}
+                    type="text"
+                    value={editingItemValue}
+                    onChange={(e) => setEditingItemValue(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') saveEditItem()
+                      if (e.key === 'Escape') cancelEditItem()
+                    }}
+                    className="flex-1 px-2 py-1 border rounded text-sm"
+                  />
+                  <button onClick={saveEditItem} className="text-primary hover:text-primary/80">
+                    <Check className="w-4 h-4" />
+                  </button>
+                  <button onClick={cancelEditItem} className="text-muted-foreground hover:text-foreground">
+                    <X className="w-4 h-4" />
+                  </button>
+                </>
+              ) : (
+                <>
+                  <span 
+                    className="flex-1 cursor-pointer hover:text-primary"
+                    onClick={() => startEditItem('criteria', index, item)}
+                  >
+                    {item}
+                  </span>
+                  <button
+                    onClick={() => startEditItem('criteria', index, item)}
+                    className="opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-primary transition-opacity"
+                  >
+                    <Pencil className="w-3 h-3" />
+                  </button>
+                  <button
+                    onClick={() => handleRemoveItem('criteria', index)}
+                    className="opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-error transition-opacity"
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
+                </>
+              )}
             </div>
           ))}
           <div className="flex gap-2">
@@ -211,13 +299,48 @@ export default function IntentStage() {
             {localMustHave.map((item, index) => (
               <div key={index} className="flex items-center gap-2 px-3 py-2 bg-success/10 rounded group text-sm">
                 <span className="text-success">+</span>
-                <span className="flex-1">{item}</span>
-                <button
-                  onClick={() => handleRemoveItem('mustHave', index)}
-                  className="opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-error"
-                >
-                  <X className="w-3 h-3" />
-                </button>
+                {editingItemIndex?.field === 'mustHave' && editingItemIndex?.index === index ? (
+                  <>
+                    <input
+                      ref={editInputRef}
+                      type="text"
+                      value={editingItemValue}
+                      onChange={(e) => setEditingItemValue(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') saveEditItem()
+                        if (e.key === 'Escape') cancelEditItem()
+                      }}
+                      className="flex-1 px-2 py-1 border rounded text-sm"
+                    />
+                    <button onClick={saveEditItem} className="text-success hover:text-success/80">
+                      <Check className="w-3 h-3" />
+                    </button>
+                    <button onClick={cancelEditItem} className="text-muted-foreground hover:text-foreground">
+                      <X className="w-3 h-3" />
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    <span 
+                      className="flex-1 cursor-pointer hover:text-success"
+                      onClick={() => startEditItem('mustHave', index, item)}
+                    >
+                      {item}
+                    </span>
+                    <button
+                      onClick={() => startEditItem('mustHave', index, item)}
+                      className="opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-success transition-opacity"
+                    >
+                      <Pencil className="w-3 h-3" />
+                    </button>
+                    <button
+                      onClick={() => handleRemoveItem('mustHave', index)}
+                      className="opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-error transition-opacity"
+                    >
+                      <X className="w-3 h-3" />
+                    </button>
+                  </>
+                )}
               </div>
             ))}
             <input
@@ -241,13 +364,48 @@ export default function IntentStage() {
             {localMustAvoid.map((item, index) => (
               <div key={index} className="flex items-center gap-2 px-3 py-2 bg-error/10 rounded group text-sm">
                 <span className="text-error">-</span>
-                <span className="flex-1">{item}</span>
-                <button
-                  onClick={() => handleRemoveItem('mustAvoid', index)}
-                  className="opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-error"
-                >
-                  <X className="w-3 h-3" />
-                </button>
+                {editingItemIndex?.field === 'mustAvoid' && editingItemIndex?.index === index ? (
+                  <>
+                    <input
+                      ref={editInputRef}
+                      type="text"
+                      value={editingItemValue}
+                      onChange={(e) => setEditingItemValue(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') saveEditItem()
+                        if (e.key === 'Escape') cancelEditItem()
+                      }}
+                      className="flex-1 px-2 py-1 border rounded text-sm"
+                    />
+                    <button onClick={saveEditItem} className="text-error hover:text-error/80">
+                      <Check className="w-3 h-3" />
+                    </button>
+                    <button onClick={cancelEditItem} className="text-muted-foreground hover:text-foreground">
+                      <X className="w-3 h-3" />
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    <span 
+                      className="flex-1 cursor-pointer hover:text-error"
+                      onClick={() => startEditItem('mustAvoid', index, item)}
+                    >
+                      {item}
+                    </span>
+                    <button
+                      onClick={() => startEditItem('mustAvoid', index, item)}
+                      className="opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-error transition-opacity"
+                    >
+                      <Pencil className="w-3 h-3" />
+                    </button>
+                    <button
+                      onClick={() => handleRemoveItem('mustAvoid', index)}
+                      className="opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-error transition-opacity"
+                    >
+                      <X className="w-3 h-3" />
+                    </button>
+                  </>
+                )}
               </div>
             ))}
             <input

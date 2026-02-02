@@ -2,8 +2,8 @@
 // 右侧对话区 - 全局Agent入口
 // 功能：AI对话、@引用机制、再来一回、内容修改同步
 
-import { useState, useRef, useEffect, useCallback } from 'react'
-import { Send, Loader2, RotateCcw, Pencil, X, AtSign } from 'lucide-react'
+import { useState, useRef, useEffect, useCallback, useMemo } from 'react'
+import { Send, Loader2, RotateCcw, Pencil, X, AtSign, Copy, Check } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useWorkflowStore } from '@/stores/workflowStore'
 import type { ChatMessage, Stage } from '@/types'
@@ -29,6 +29,17 @@ function MessageBubble({ message, isLast, onRetry }: MessageBubbleProps) {
   const isSystem = message.role === 'system'
   const [isEditing, setIsEditing] = useState(false)
   const [editContent, setEditContent] = useState(message.content)
+  const [copied, setCopied] = useState(false)
+  
+  const handleCopy = async () => {
+    try {
+      await navigator.clipboard.writeText(message.content)
+      setCopied(true)
+      setTimeout(() => setCopied(false), 2000)
+    } catch (err) {
+      console.error('复制失败:', err)
+    }
+  }
   
   if (isSystem) {
     return (
@@ -96,25 +107,52 @@ function MessageBubble({ message, isLast, onRetry }: MessageBubbleProps) {
           </div>
         )}
         
-        {/* 用户消息的操作按钮 */}
-        {isUser && !isEditing && onRetry && (
-          <div className="flex gap-1 mt-1 justify-end opacity-0 group-hover:opacity-100 transition-opacity">
+        {/* 消息操作按钮 */}
+        {!isEditing && (
+          <div className={cn(
+            "flex gap-1 mt-1 opacity-0 group-hover:opacity-100 transition-opacity",
+            isUser ? "justify-end" : "justify-start"
+          )}>
+            {/* 复制按钮 - 所有消息都有 */}
             <button
-              onClick={() => setIsEditing(true)}
+              onClick={handleCopy}
               className="p-1 text-xs text-muted-foreground hover:text-foreground rounded flex items-center gap-1"
-              title="编辑并重发"
+              title="复制内容"
             >
-              <Pencil className="w-3 h-3" />
-              <span>编辑</span>
+              {copied ? (
+                <>
+                  <Check className="w-3 h-3 text-green-500" />
+                  <span className="text-green-500">已复制</span>
+                </>
+              ) : (
+                <>
+                  <Copy className="w-3 h-3" />
+                  <span>复制</span>
+                </>
+              )}
             </button>
-            <button
-              onClick={() => onRetry(message.content)}
-              className="p-1 text-xs text-muted-foreground hover:text-foreground rounded flex items-center gap-1"
-              title="重新发送"
-            >
-              <RotateCcw className="w-3 h-3" />
-              <span>重试</span>
-            </button>
+            
+            {/* 用户消息额外的编辑和重试按钮 */}
+            {isUser && onRetry && (
+              <>
+                <button
+                  onClick={() => setIsEditing(true)}
+                  className="p-1 text-xs text-muted-foreground hover:text-foreground rounded flex items-center gap-1"
+                  title="编辑并重发"
+                >
+                  <Pencil className="w-3 h-3" />
+                  <span>编辑</span>
+                </button>
+                <button
+                  onClick={() => onRetry(message.content)}
+                  className="p-1 text-xs text-muted-foreground hover:text-foreground rounded flex items-center gap-1"
+                  title="重新发送"
+                >
+                  <RotateCcw className="w-3 h-3" />
+                  <span>重试</span>
+                </button>
+              </>
+            )}
           </div>
         )}
       </div>
@@ -193,30 +231,50 @@ export default function ChatPanel() {
   }, [messages])
 
   // 构建可引用的上下文选项
-  const mentionOptions: MentionOption[] = [
-    {
-      id: 'intent',
-      label: '意图分析',
-      category: 'stage',
-      available: !!workflowData?.intent,
-      description: '项目目标和成功标准',
-    },
-    {
-      id: 'research',
-      label: '消费者调研',
-      category: 'stage',
-      available: !!workflowData?.consumer_research,
-      description: '用户画像和痛点期望',
-    },
-    {
-      id: 'core_design',
-      label: '内涵设计',
-      category: 'stage',
-      available: !!workflowData?.content_core,
-      description: '设计方案',
-    },
-    // 可以添加更多字段级别的引用
-  ]
+  const mentionOptions: MentionOption[] = useMemo(() => {
+    const options: MentionOption[] = [
+      {
+        id: 'intent',
+        label: '意图分析',
+        category: 'stage',
+        available: !!workflowData?.intent,
+        description: '项目目标和成功标准',
+      },
+      {
+        id: 'research',
+        label: '消费者调研',
+        category: 'stage',
+        available: !!workflowData?.consumer_research,
+        description: '用户画像和痛点期望',
+      },
+      {
+        id: 'core_design',
+        label: '内涵设计',
+        category: 'stage',
+        available: !!workflowData?.content_core,
+        description: '设计方案',
+      },
+    ]
+    
+    // 添加内涵生产已完成的字段
+    if (workflowData?.content_core?.sections) {
+      for (const section of workflowData.content_core.sections) {
+        for (const field of section.fields) {
+          if (field.status === 'completed' && field.content) {
+            options.push({
+              id: `field_${field.id}`,
+              label: `${section.name}/${field.name}`,
+              category: 'field',
+              available: true,
+              description: field.content.slice(0, 50) + (field.content.length > 50 ? '...' : ''),
+            })
+          }
+        }
+      }
+    }
+    
+    return options
+  }, [workflowData])
 
   // 处理输入变化
   const handleInputChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {

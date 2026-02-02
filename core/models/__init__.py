@@ -8,7 +8,7 @@ from .field_schema import FieldSchema, FieldDefinition, create_default_field_sch
 from .project import Project
 from .intent import Intent, IntentConstraints
 from .consumer_research import ConsumerResearch, StructuredResearch
-from .content_core import ContentCore, ContentField
+from .content_core import ContentCore, ContentField, ContentSection
 from .content_extension import ContentExtension, ChannelContent
 from .simulator_feedback import SimulatorFeedback, Issue
 from .report import ProcessReport, QualityReport, StageStatus

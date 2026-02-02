@@ -109,6 +109,10 @@ class ContextManager:
         """设置创作者特质"""
         self.creator_profile = profile
     
+    def set_field_schema(self, field_schema: Any) -> None:
+        """设置字段模板"""
+        self.field_schema = field_schema
+    
     def update_golden_context(self) -> Dict[str, Any]:
         """
         更新Golden Context

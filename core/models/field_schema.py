@@ -48,6 +48,12 @@ class FieldDefinition(BaseModel):
         default_factory=list,
         description="依赖的字段名列表（这些字段的内容会作为上下文注入）"
     )
+    
+    # === 生成前交互 ===
+    clarification_prompt: str = Field(
+        default="",
+        description="生成该字段前需要向用户确认的问题（只问1轮，留空则不询问）"
+    )
 
 
 class FieldSchema(BaseModel):
@@ -126,9 +132,33 @@ class FieldSchema(BaseModel):
         """按生成顺序获取字段列表"""
         return sorted(self.fields, key=lambda f: (f.order, self.fields.index(f)))
     
+    def format_for_design(self) -> str:
+        """
+        格式化为设计阶段使用的概述（不含 ai_hint）
+        
+        用于 Core Design 阶段，只需要知道有哪些字段，
+        不需要具体的生成指令。
+        
+        Returns:
+            str: 模板概述信息
+        """
+        lines = [f"内容模板：{self.name}"]
+        if self.description:
+            lines.append(f"说明：{self.description}")
+        
+        lines.append("\n包含的字段：")
+        for field in self.fields:
+            required_mark = "（必填）" if field.required else "（选填）"
+            desc = field.description[:50] + "..." if field.description and len(field.description) > 50 else (field.description or "无描述")
+            lines.append(f"- {field.name}{required_mark}：{desc}")
+        
+        return "\n".join(lines)
+    
     def format_for_prompt(self) -> str:
         """
-        格式化为可注入prompt的文本
+        格式化为可注入prompt的完整文本（包含 ai_hint）
+        
+        用于 Core Production 阶段，需要完整的生成指令。
         
         Returns:
             str: 格式化后的字段结构描述

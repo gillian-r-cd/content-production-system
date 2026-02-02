@@ -1,24 +1,23 @@
 // web/src/components/stages/ResearchStage.tsx
 // 消费者调研阶段视图
-// 功能：显示用户画像、痛点、期望，支持编辑，用户确认后进入下一阶段
+// 功能：显示用户画像、痛点、期望，支持编辑，Persona选择加入Simulator
 
-import { useState } from 'react'
-import { Users, CheckCircle, AlertTriangle, Heart, Loader2, ArrowRight, Edit2, Save, X, UserCircle, Plus } from 'lucide-react'
+import { useState, useEffect } from 'react'
+import { useQuery } from '@tanstack/react-query'
+import { Users, CheckCircle, AlertTriangle, Heart, Loader2, ArrowRight, Edit2, Save, X, UserCircle, Plus, CheckSquare, Square, Settings, Check } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useWorkflowStore } from '@/stores/workflowStore'
+import { Persona } from '@/types'
+import apiClient from '@/api/client'
 
-interface Persona {
+interface Simulator {
   id: string
   name: string
-  role: string
-  background: string
-  pain_points: string[]
-  desires: string[]
-  selected?: boolean
+  description: string
 }
 
 export default function ResearchStage() {
-  const { workflowData, status, respond, isLoading, updateResearch } = useWorkflowStore()
+  const { workflowData, workflowId, status, respond, isLoading, updateResearch } = useWorkflowStore()
   const research = workflowData?.consumer_research
   
   const [isEditing, setIsEditing] = useState(false)
@@ -26,6 +25,39 @@ export default function ResearchStage() {
     summary: '',
     pain_points: [] as string[],
     desires: [] as string[],
+  })
+  
+  // Persona 选择状态
+  const [selectedPersonas, setSelectedPersonas] = useState<Set<string>>(new Set())
+  const [editingPersonaId, setEditingPersonaId] = useState<string | null>(null)
+  const [personaEditData, setPersonaEditData] = useState<Persona | null>(null)
+  
+  // Persona 保存状态
+  const [isSavingPersonas, setIsSavingPersonas] = useState(false)
+  const [personasSaved, setPersonasSaved] = useState(false)
+  const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false)
+  
+  // 从后端数据初始化已选择的 Personas
+  useEffect(() => {
+    if (research?.personas) {
+      const initialSelected = new Set<string>()
+      research.personas.forEach((p: Persona) => {
+        if (p.selected) {
+          initialSelected.add(p.id)
+        }
+      })
+      setSelectedPersonas(initialSelected)
+      setHasUnsavedChanges(false)
+    }
+  }, [research?.personas])
+  
+  // 获取 Simulator 列表
+  const { data: simulators = [] } = useQuery({
+    queryKey: ['simulators'],
+    queryFn: async () => {
+      const { data } = await apiClient.get('/simulators')
+      return data as Simulator[]
+    },
   })
 
   // 初始化编辑数据
@@ -80,6 +112,60 @@ export default function ResearchStage() {
       ...prev,
       [type]: prev[type].filter((_, i) => i !== index),
     }))
+  }
+
+  // Persona 选择切换
+  const togglePersonaSelection = (personaId: string) => {
+    setSelectedPersonas(prev => {
+      const newSet = new Set(prev)
+      if (newSet.has(personaId)) {
+        newSet.delete(personaId)
+      } else {
+        newSet.add(personaId)
+      }
+      return newSet
+    })
+    setHasUnsavedChanges(true)
+    setPersonasSaved(false)
+  }
+  
+  // 保存 Persona 选择到后端
+  const savePersonasSelection = async () => {
+    if (!workflowId) return
+    
+    setIsSavingPersonas(true)
+    try {
+      await apiClient.patch(`/workflow/${workflowId}/personas`, {
+        selected_persona_ids: Array.from(selectedPersonas),
+      })
+      setPersonasSaved(true)
+      setHasUnsavedChanges(false)
+      // 3秒后隐藏保存成功提示
+      setTimeout(() => setPersonasSaved(false), 3000)
+    } catch (error) {
+      console.error('保存 Personas 失败:', error)
+    } finally {
+      setIsSavingPersonas(false)
+    }
+  }
+  
+  // 开始编辑 Persona
+  const startEditingPersona = (persona: Persona) => {
+    setEditingPersonaId(persona.id)
+    setPersonaEditData({ ...persona })
+  }
+  
+  // 保存 Persona 编辑
+  const savePersonaEdit = async () => {
+    // TODO: 调用后端API保存 Persona 修改
+    setEditingPersonaId(null)
+    setPersonaEditData(null)
+  }
+  
+  // 取消编辑 Persona
+  const cancelPersonaEdit = () => {
+    setEditingPersonaId(null)
+    setPersonaEditData(null)
   }
 
   // 检查是否在研究阶段（无论是否等待输入都显示确认按钮）
@@ -272,41 +358,183 @@ export default function ResearchStage() {
       {/* 典型用户画像(Personas) - 如果有的话 */}
       {personas.length > 0 && (
         <div className="mt-6">
-          <div className="flex items-center gap-2 mb-3">
-            <UserCircle className="w-4 h-4 text-primary" />
-            <label className="text-sm font-medium">典型用户画像</label>
-            <span className="text-xs text-muted-foreground">（可选择加入Simulator进行评估）</span>
+          <div className="flex items-center justify-between mb-3">
+            <div className="flex items-center gap-2">
+              <UserCircle className="w-4 h-4 text-primary" />
+              <label className="text-sm font-medium">典型用户画像</label>
+              <span className="text-xs text-muted-foreground">（可选择加入Simulator进行评估）</span>
+            </div>
+            <div className="flex items-center gap-2">
+              {selectedPersonas.size > 0 && (
+                <span className="text-xs bg-primary/10 text-primary px-2 py-1 rounded">
+                  已选择 {selectedPersonas.size} 个
+                </span>
+              )}
+              {/* 保存状态提示 */}
+              {personasSaved && (
+                <span className="text-xs text-success flex items-center gap-1">
+                  <Check className="w-3 h-3" />
+                  已保存
+                </span>
+              )}
+              {hasUnsavedChanges && !personasSaved && (
+                <span className="text-xs text-warning">未保存</span>
+              )}
+              {/* 保存按钮 */}
+              {selectedPersonas.size > 0 && (
+                <button
+                  onClick={savePersonasSelection}
+                  disabled={isSavingPersonas || !hasUnsavedChanges}
+                  className={cn(
+                    "flex items-center gap-1 px-3 py-1 text-xs rounded-md transition-colors",
+                    hasUnsavedChanges
+                      ? "bg-primary text-primary-foreground hover:bg-primary/90"
+                      : "bg-muted text-muted-foreground"
+                  )}
+                >
+                  {isSavingPersonas ? (
+                    <Loader2 className="w-3 h-3 animate-spin" />
+                  ) : (
+                    <Save className="w-3 h-3" />
+                  )}
+                  保存选择
+                </button>
+              )}
+            </div>
           </div>
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-            {personas.map((persona: Persona) => (
-              <div
-                key={persona.id}
-                className={cn(
-                  "border rounded-lg p-4 cursor-pointer transition-all",
-                  persona.selected 
-                    ? "border-primary bg-primary/5" 
-                    : "hover:border-primary/50"
-                )}
-              >
-                <div className="flex items-center gap-2 mb-2">
-                  <div className="w-10 h-10 bg-primary/10 rounded-full flex items-center justify-center">
-                    <UserCircle className="w-6 h-6 text-primary" />
+            {personas.map((persona: Persona) => {
+              const isSelected = selectedPersonas.has(persona.id)
+              const isEditingThis = editingPersonaId === persona.id
+              
+              if (isEditingThis && personaEditData) {
+                // 编辑模式
+                return (
+                  <div key={persona.id} className="border border-primary rounded-lg p-4 bg-primary/5">
+                    <div className="space-y-3">
+                      <input
+                        type="text"
+                        value={personaEditData.name}
+                        onChange={(e) => setPersonaEditData({ ...personaEditData, name: e.target.value })}
+                        className="w-full px-2 py-1 border rounded text-sm font-medium"
+                        placeholder="姓名"
+                      />
+                      <input
+                        type="text"
+                        value={personaEditData.role}
+                        onChange={(e) => setPersonaEditData({ ...personaEditData, role: e.target.value })}
+                        className="w-full px-2 py-1 border rounded text-xs"
+                        placeholder="角色"
+                      />
+                      <textarea
+                        value={personaEditData.background}
+                        onChange={(e) => setPersonaEditData({ ...personaEditData, background: e.target.value })}
+                        className="w-full px-2 py-1 border rounded text-sm resize-none"
+                        rows={3}
+                        placeholder="背景介绍"
+                      />
+                      <div className="flex gap-2">
+                        <button
+                          onClick={cancelPersonaEdit}
+                          className="flex-1 px-2 py-1 text-xs border rounded hover:bg-accent"
+                        >
+                          取消
+                        </button>
+                        <button
+                          onClick={savePersonaEdit}
+                          className="flex-1 px-2 py-1 text-xs bg-primary text-primary-foreground rounded"
+                        >
+                          保存
+                        </button>
+                      </div>
+                    </div>
                   </div>
-                  <div>
-                    <p className="font-medium">{persona.name}</p>
-                    <p className="text-xs text-muted-foreground">{persona.role}</p>
+                )
+              }
+              
+              // 显示模式
+              return (
+                <div
+                  key={persona.id}
+                  className={cn(
+                    "border rounded-lg p-4 transition-all relative group",
+                    isSelected 
+                      ? "border-primary bg-primary/5" 
+                      : "hover:border-primary/50"
+                  )}
+                >
+                  {/* 选择复选框 */}
+                  <button
+                    onClick={() => togglePersonaSelection(persona.id)}
+                    className="absolute top-2 right-2 p-1 hover:bg-accent rounded"
+                    title={isSelected ? "取消选择" : "选择加入Simulator"}
+                  >
+                    {isSelected ? (
+                      <CheckSquare className="w-5 h-5 text-primary" />
+                    ) : (
+                      <Square className="w-5 h-5 text-muted-foreground" />
+                    )}
+                  </button>
+                  
+                  {/* 编辑按钮 */}
+                  <button
+                    onClick={() => startEditingPersona(persona)}
+                    className="absolute top-2 right-10 p-1 hover:bg-accent rounded opacity-0 group-hover:opacity-100 transition-opacity"
+                    title="编辑"
+                  >
+                    <Edit2 className="w-4 h-4 text-muted-foreground" />
+                  </button>
+                  
+                  <div className="flex items-center gap-2 mb-2 pr-16">
+                    <div className="w-10 h-10 bg-primary/10 rounded-full flex items-center justify-center flex-shrink-0">
+                      <UserCircle className="w-6 h-6 text-primary" />
+                    </div>
+                    <div className="min-w-0">
+                      <p className="font-medium truncate">{persona.name}</p>
+                      <p className="text-xs text-muted-foreground truncate">{persona.role}</p>
+                    </div>
                   </div>
+                  <p className="text-sm text-muted-foreground mb-2 line-clamp-3">{persona.background}</p>
+                  {persona.pain_points?.length > 0 && (
+                    <div className="text-xs">
+                      <span className="text-warning font-medium">痛点：</span>
+                      <span className="text-muted-foreground">{persona.pain_points.slice(0, 2).join('、')}</span>
+                    </div>
+                  )}
                 </div>
-                <p className="text-sm text-muted-foreground mb-2">{persona.background}</p>
-                {persona.pain_points?.length > 0 && (
-                  <div className="text-xs">
-                    <span className="text-warning">痛点：</span>
-                    {persona.pain_points.slice(0, 2).join('、')}
-                  </div>
-                )}
-              </div>
-            ))}
+              )
+            })}
           </div>
+          
+          {/* Simulator 选择区域 */}
+          {selectedPersonas.size > 0 && (
+            <div className="mt-4 p-4 border rounded-lg bg-muted/30">
+              <div className="flex items-center gap-2 mb-3">
+                <Settings className="w-4 h-4 text-primary" />
+                <span className="text-sm font-medium">选择评估器进行评估</span>
+              </div>
+              {simulators.length > 0 ? (
+                <div className="flex flex-wrap gap-2">
+                  {simulators.map((sim) => (
+                    <button
+                      key={sim.id}
+                      className="px-3 py-1.5 text-sm border rounded-md hover:bg-primary hover:text-primary-foreground hover:border-primary transition-colors"
+                      onClick={() => {
+                        // TODO: 触发 Simulator 评估
+                        alert(`将使用 "${sim.name}" 评估 ${selectedPersonas.size} 个 Persona`)
+                      }}
+                    >
+                      {sim.name}
+                    </button>
+                  ))}
+                </div>
+              ) : (
+                <p className="text-sm text-muted-foreground">
+                  暂无评估器，请先在设置中创建评估器
+                </p>
+              )}
+            </div>
+          )}
         </div>
       )}
 

@@ -3,6 +3,8 @@
 # 主要类：PromptEngine
 # 核心能力：Jinja2模板渲染、CreatorProfile动态注入、GoldenContext自动构建
 
+from __future__ import annotations
+
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 import yaml

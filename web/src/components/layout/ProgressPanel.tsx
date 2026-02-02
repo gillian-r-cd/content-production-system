@@ -51,7 +51,7 @@ export default function ProgressPanel() {
       </h2>
       
       <nav className="space-y-1">
-        {STAGES.map((stage, index) => {
+        {STAGES.map((stage) => {
           const stageStatus = stages[stage.name] as StageStatus | undefined
           const isCurrent = currentStage === stage.name
           const isSelected = selectedStage === stage.name
@@ -62,21 +62,25 @@ export default function ProgressPanel() {
               onClick={() => setSelectedStage(stage.name)}
               className={cn(
                 "w-full flex items-center gap-3 px-3 py-2 rounded-md text-left transition-colors",
-                isCurrent && "bg-primary/10 text-primary",
-                isSelected && !isCurrent && "bg-accent",
-                !isCurrent && !isSelected && "hover:bg-accent"
+                // 选中状态优先显示（用户点击的项目）
+                isSelected && "bg-primary/10 text-primary font-medium",
+                // 非选中状态的 hover 效果
+                !isSelected && "hover:bg-accent"
               )}
             >
               <span className="flex-shrink-0">
                 {getStatusIcon(stageStatus)}
               </span>
               <span className={cn(
-                "text-sm",
-                stageStatus === 'completed' && "text-success",
-                isCurrent && "font-medium"
+                "text-sm flex-1",
+                stageStatus === 'completed' && !isSelected && "text-success"
               )}>
                 {stage.label}
               </span>
+              {/* 当前阶段指示器（箭头） */}
+              {isCurrent && (
+                <ArrowRight className="w-3 h-3 text-primary flex-shrink-0" />
+              )}
             </button>
           )
         })}

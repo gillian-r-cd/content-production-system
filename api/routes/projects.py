@@ -130,6 +130,43 @@ async def create_project(data: ProjectCreate):
     )
 
 
+class ProjectUpdate(BaseModel):
+    """更新项目请求"""
+    name: Optional[str] = None
+    description: Optional[str] = None
+
+
+@router.put("/{project_id}", response_model=ProjectResponse)
+async def update_project(project_id: str, data: ProjectUpdate):
+    """更新项目"""
+    ensure_storage()
+    project_file = STORAGE_PATH / "projects" / project_id / "project.yaml"
+    
+    if not project_file.exists():
+        raise HTTPException(status_code=404, detail="项目不存在")
+    
+    project = Project.load(project_file)
+    
+    # 更新字段
+    if data.name is not None:
+        project.name = data.name
+    if data.description is not None:
+        project.description = data.description
+    
+    project.updated_at = datetime.now()
+    project.save(project_file)
+    
+    return ProjectResponse(
+        id=project.id,
+        name=project.name,
+        description=project.description or "",
+        creator_profile_id=project.creator_profile_id,
+        status=project.status,
+        created_at=str(project.created_at) if project.created_at else "",
+        updated_at=str(project.updated_at) if project.updated_at else "",
+    )
+
+
 @router.delete("/{project_id}")
 async def delete_project(project_id: str):
     """删除项目"""

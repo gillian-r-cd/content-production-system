@@ -89,10 +89,14 @@ class ContentCoreProducer(BaseModule):
                 research_context = f"\n【目标用户】\n{research.format_for_prompt() if hasattr(research, 'format_for_prompt') else str(research)}\n"
         
         # 构建prompt - 要求严格的结构化输出
+        # 使用 format_for_design() 而不是 format_for_prompt()，因为设计阶段不需要 ai_hint
+        field_schema_summary = ""
+        if field_schema:
+            field_schema_summary = field_schema.format_for_design()
+        
         system_prompt = f"""你是一个内容策略专家。请为以下内容品类生成{scheme_count}个差异化的设计方案。
 
-内容品类：{field_schema.name if field_schema else '未指定'}
-{field_schema.format_for_prompt() if field_schema else ''}
+{field_schema_summary}
 {intent_context}
 {research_context}
 
@@ -317,99 +321,142 @@ schemes:
         return result
     
     def _produce_field(self, input_data: Dict[str, Any]) -> ModuleResult:
-        """生产单个字段"""
+        """
+        生产单个字段
+        
+        提示词结构（优化后，避免重复）：
+        1. 角色定义 + 任务说明
+        2. 全局约束（创作者禁忌、风格范例）
+        3. 设计方案（当前选中的方案）
+        4. 依赖字段内容（如果有依赖）
+        5. 当前字段的生成指令（ai_hint是核心！）
+        """
         content_core = input_data.get("content_core")
         field_name = input_data.get("field_name", "")
         field_schema = input_data.get("field_schema")
-        selected_scheme = input_data.get("selected_scheme")  # 选中的设计方案
+        selected_scheme = input_data.get("selected_scheme")
         
         if not content_core:
             return ModuleResult.fail("缺少ContentCore对象")
         
-        # 获取字段定义
+        # 获取字段定义（从 field_schema）
         field_def = None
         if field_schema:
             field_def = field_schema.get_field(field_name)
         
-        # 获取依赖字段的内容（按 depends_on 过滤）
-        dependency_context = ""
+        # 获取当前字段对象（从 content_core，用于获取 clarification_answer）
+        current_field = content_core.get_field(field_name)
+        
+        # ========== 1. 构建角色定义 ==========
+        role_prompt = "你是一个专业的内容生产专家，正在为用户生成高质量的内容。"
+        
+        # ========== 2. 构建全局约束（精简版，避免重复） ==========
+        constraints_prompt = ""
+        golden = self.build_golden_context()
+        if golden:
+            constraints = golden.get("creator_constraints", {})
+            if constraints:
+                lines = ["【创作者约束】"]
+                taboos = constraints.get("taboos", {})
+                if taboos.get("forbidden_words"):
+                    lines.append(f"🚫 禁用词汇：{', '.join(taboos['forbidden_words'][:10])}")  # 只取前10个
+                if taboos.get("forbidden_topics"):
+                    lines.append(f"🚫 禁碰话题：{', '.join(taboos['forbidden_topics'][:5])}")  # 只取前5个
+                examples = constraints.get("voice_examples", [])
+                if examples:
+                    lines.append(f"\n📝 风格参考（节选）：\n{examples[0][:300]}...")  # 只取第一个示例的前300字
+                constraints_prompt = "\n".join(lines) + "\n"
+        
+        # ========== 3. 构建设计方案上下文 ==========
+        scheme_prompt = ""
+        if selected_scheme and isinstance(selected_scheme, dict):
+            scheme_prompt = f"""【当前设计方案】
+方案名称：{selected_scheme.get('name', '未命名')}
+方案描述：{selected_scheme.get('description', '')}
+实现方法：{selected_scheme.get('approach', '')}
+"""
+        
+        # ========== 4. 构建依赖字段内容 ==========
+        # 两种依赖来源：
+        # 1. 显式依赖（field_def.depends_on 定义的字段）
+        # 2. 隐式依赖（同章节内已完成的字段）
+        
+        dependency_prompt = ""
+        dep_contents = []
+        
+        # 4.1 显式依赖
         if field_def and hasattr(field_def, 'depends_on') and field_def.depends_on:
-            dependency_context = "\n【依赖字段（必须参考）】\n"
             for dep_name in field_def.depends_on:
                 dep_field = content_core.get_field(dep_name)
                 if dep_field and dep_field.content:
-                    dependency_context += f"\n## {dep_name}\n{dep_field.content}\n"
+                    dep_contents.append(f"## {dep_name}\n{dep_field.content}")
         
-        # 获取其他已完成的字段（用于上下文，但优先级低于依赖字段）
-        previous_fields = content_core.get_completed_fields()
-        other_completed = [f for f in previous_fields 
-                         if not field_def or not hasattr(field_def, 'depends_on') 
-                         or f.name not in (field_def.depends_on or [])]
+        # 4.2 隐式依赖：同章节内已完成的字段（自动注入）
+        # 找到当前字段所在的章节
+        current_section = None
+        current_field_order = 0
+        for section in content_core.sections:
+            for i, field in enumerate(section.fields):
+                if field.id == current_field.id if current_field else field.name == field_name:
+                    current_section = section
+                    current_field_order = i
+                    break
+            if current_section:
+                break
         
-        # 获取意图和消费者调研上下文
-        intent_context = ""
-        research_context = ""
-        if self.context_manager:
-            intent = self.context_manager.get_stage_context("intent")
-            if intent:
-                intent_context = f"\n【项目意图】\n{intent.format_for_prompt() if hasattr(intent, 'format_for_prompt') else str(intent)}\n"
-            research = self.context_manager.get_stage_context("consumer_research")
-            if research:
-                research_context = f"\n【目标用户】\n{research.format_for_prompt() if hasattr(research, 'format_for_prompt') else str(research)}\n"
+        # 获取同章节内在当前字段之前已完成的字段
+        if current_section:
+            for i, field in enumerate(current_section.fields):
+                if i >= current_field_order:
+                    break
+                if field.status == "completed" and field.content:
+                    # 避免重复添加显式依赖
+                    if not any(f"## {field.name}\n" in dep for dep in dep_contents):
+                        dep_contents.append(f"## {field.name}\n{field.content}")
         
-        # 构建设计方案上下文
-        scheme_context = ""
-        if selected_scheme:
-            if isinstance(selected_scheme, dict):
-                scheme_context = f"\n【选中的设计方案】\n"
-                scheme_context += f"名称：{selected_scheme.get('name', '未命名')}\n"
-                scheme_context += f"类型：{selected_scheme.get('type', '')}\n"
-                scheme_context += f"描述：{selected_scheme.get('description', '')}\n"
-                scheme_context += f"方法：{selected_scheme.get('approach', '')}\n"
-                if selected_scheme.get('key_features'):
-                    scheme_context += f"特点：{', '.join(selected_scheme.get('key_features', []))}\n"
+        if dep_contents:
+            dependency_prompt = "【参考内容（已生成的依赖字段）】\n" + "\n\n".join(dep_contents) + "\n"
         
-        # 构建其他已完成字段上下文（不包括依赖字段，避免重复）
-        completed_context = ""
-        if other_completed:
-            completed_context = "\n【其他已完成的字段（供参考）】\n"
-            for f in other_completed:
-                if f.content:
-                    truncated = f.content[:500] + "..." if len(f.content or "") > 500 else f.content
-                    completed_context += f"\n## {f.name}\n{truncated}\n"
-        
-        # 构建字段要求
-        field_requirement = f"""
-【当前字段】{field_name}
-说明：{field_def.description if field_def else '根据上下文生成此字段内容'}
-生成提示：{field_def.ai_hint if field_def else '保持与整体风格一致'}
+        # ========== 5. 构建当前字段的生成指令（ai_hint是核心！）==========
+        # ai_hint 是用户定义的提示词，应该被突出使用
+        field_prompt = f"""【生成任务】
+字段名称：{field_name}
+字段说明：{field_def.description if field_def and field_def.description else '无'}
 """
+        
+        # ai_hint 是核心提示词，单独突出
+        if field_def and field_def.ai_hint:
+            field_prompt += f"""
+⭐ 生成要求（重要！请严格遵循）：
+{field_def.ai_hint}
+"""
+        
         if field_def and field_def.example:
-            field_requirement += f"参考示例：{field_def.example}\n"
+            field_prompt += f"\n参考示例：{field_def.example}\n"
         
-        # 构建完整的system prompt
-        system_prompt = f"""你是一个专业的内容生产专家。请根据以下上下文生成高质量的内容。
-
-{intent_context}
-{research_context}
-{scheme_context}
-{dependency_context}
-{completed_context}
-
-{field_requirement}
-
-请直接输出内容，不需要添加字段名称或额外格式。保持内容专业、有价值，符合项目整体风格。
+        # ========== 6. 用户澄清回答（如果有）==========
+        # 这是用户在生成前回答的问题，应该作为重要上下文
+        if current_field and current_field.clarification_answer:
+            field_prompt += f"""
+📝 用户补充信息：
+{current_field.clarification_answer}
 """
         
-        # 添加Golden Context
-        golden = self.build_golden_context()
-        if golden:
-            from core.prompt_engine import GoldenContextBuilder
-            system_prompt = GoldenContextBuilder.format_for_system_prompt(golden) + "\n\n" + system_prompt
+        # ========== 组装最终提示词 ==========
+        system_prompt = f"""{role_prompt}
+
+{constraints_prompt}
+{scheme_prompt}
+{dependency_prompt}
+{field_prompt}
+
+请直接输出【{field_name}】的内容，不需要添加标题或额外格式。"""
         
-        user_message = f"请生成【{field_name}】的内容。"
+        user_message = f"请生成【{field_name}】字段的内容。"
         
         self.log(f"开始生成字段: {field_name}", "info")
+        if field_def and field_def.ai_hint:
+            self.log(f"字段 ai_hint: {field_def.ai_hint[:100]}...", "debug")
         
         # 调用AI
         response = self.call_ai(

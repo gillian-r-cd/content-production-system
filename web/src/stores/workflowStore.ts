@@ -46,7 +46,7 @@ interface WorkflowState {
   refreshData: () => Promise<void>
   
   // Actions - 意图阶段
-  updateIntent: (intent: Partial<Intent>) => void
+  updateIntent: (intent: Partial<Intent>) => Promise<void>
   confirmIntent: () => Promise<void>
   
   // Actions - 消费者调研阶段
@@ -55,6 +55,7 @@ interface WorkflowState {
   // Actions - 方案选择
   selectScheme: (index: number, schemaId?: string) => Promise<void>
   updateScheme: (index: number, scheme: any) => Promise<void>
+  regenerateSchemes: () => Promise<void>
   
   // Actions - 对话
   addMessage: (role: 'user' | 'assistant' | 'system', content: string, stage?: Stage) => void
@@ -196,10 +197,17 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
         })
       }
       
-      // 自动加载关联的创作者特质
+      // 自动加载关联的创作者特质（包含完整数据）
       const profile = data.profile ? {
         id: data.profile.id,
         name: data.profile.name,
+        taboos: data.profile.taboos || {
+          forbidden_words: [],
+          forbidden_topics: [],
+          forbidden_patterns: [],
+        },
+        example_texts: data.profile.example_texts || [],
+        custom_fields: data.profile.custom_fields || {},
       } as Profile : null
       
       set({
@@ -290,7 +298,11 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
     }
   },
 
-  updateIntent: (intentUpdate) => {
+  updateIntent: async (intentUpdate) => {
+    const { workflowId } = get()
+    if (!workflowId) return
+    
+    // 本地更新
     set((state) => ({
       workflowData: state.workflowData ? {
         ...state.workflowData,
@@ -300,6 +312,13 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
         } : null,
       } : null,
     }))
+    
+    // 同步到后端
+    try {
+      await apiClient.patch(`/workflow/${workflowId}/intent`, intentUpdate)
+    } catch (error) {
+      console.error('Intent update failed:', error)
+    }
   },
 
   confirmIntent: async () => {
@@ -452,6 +471,34 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
     }
   },
 
+  regenerateSchemes: async () => {
+    const { workflowId, status } = get()
+    if (!workflowId) return
+    
+    set({ isLoading: true, error: null })
+    get().addMessage('user', '重新生成内涵设计', status?.current_stage)
+    
+    try {
+      const { data } = await apiClient.post(`/workflow/${workflowId}/regenerate-schemes`)
+      
+      // 更新本地数据
+      set((state) => ({
+        workflowData: state.workflowData ? {
+          ...state.workflowData,
+          content_core: data.content_core,
+        } : { content_core: data.content_core },
+        status: data.status || state.status,
+        isLoading: false,
+      }))
+      
+      get().addMessage('assistant', `已重新生成 ${data.design_schemes?.length || 0} 个设计方案，请在左侧查看并选择。`, 'core_design')
+      
+    } catch (error: any) {
+      set({ isLoading: false })
+      get().addMessage('system', `重新生成失败: ${error.response?.data?.detail || error.message}`, status?.current_stage)
+    }
+  },
+
   addMessage: (role, content, stage) => {
     const message: ChatMessage = {
       id: `msg_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
@@ -466,7 +513,7 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
   },
 
   retryFromMessage: async (messageId, newContent) => {
-    const { messages, respond } = get()
+    const { messages, status, agentChat, respond } = get()
     
     // 找到该消息的索引
     const messageIndex = messages.findIndex(m => m.id === messageId)
@@ -476,8 +523,13 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
     const newMessages = messages.slice(0, messageIndex)
     set({ messages: newMessages })
     
-    // 重新发送
-    await respond(newContent)
+    // 根据当前状态选择发送方式
+    // 如果正在等待输入，使用 respond；否则使用 agentChat
+    if (status?.waiting_for_input) {
+      await respond(newContent)
+    } else {
+      await agentChat(newContent)
+    }
   },
 
   agentChat: async (message) => {
@@ -499,14 +551,20 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
     get().addMessage('user', message, status?.current_stage)
     
     try {
-      // 解析@引用
-      const mentionPattern = /@(意图分析|消费者调研|内涵设计|内涵生产|外延生产)/g
-      const mentions = message.match(mentionPattern) || []
+      // 解析@引用 - 支持阶段和字段级别的引用
+      // 阶段引用：@意图分析、@消费者调研 等
+      // 字段引用：@章节名/字段名
+      const stagePattern = /@(意图分析|消费者调研|内涵设计|内涵生产|外延生产)/g
+      const fieldPattern = /@([^@\s]+\/[^@\s]+)/g
+      
+      const stageMentions = message.match(stagePattern) || []
+      const fieldMentions = message.match(fieldPattern) || []
       
       // 构建上下文引用
       const contexts: { type: string; content: string }[] = []
       
-      for (const mention of mentions) {
+      // 处理阶段引用
+      for (const mention of stageMentions) {
         const type = mention.replace('@', '')
         let content = ''
         
@@ -539,23 +597,54 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
         }
       }
       
+      // 处理字段引用（格式：@章节名/字段名）
+      for (const mention of fieldMentions) {
+        const path = mention.replace('@', '')
+        const [sectionName, fieldName] = path.split('/')
+        
+        if (workflowData?.content_core?.sections) {
+          const section = workflowData.content_core.sections.find(s => s.name === sectionName)
+          if (section) {
+            const field = section.fields.find(f => f.name === fieldName || f.display_name === fieldName)
+            if (field && field.content) {
+              contexts.push({
+                type: `字段:${sectionName}/${fieldName}`,
+                content: field.content,
+              })
+            }
+          }
+        }
+      }
+      
       // 调用后端Agent API
       const { data } = await apiClient.post(`/workflow/${workflowId}/agent-chat`, {
         message,
         contexts,
       })
       
-      set({ isLoading: false })
+      // 如果有数据更新，立即更新本地数据
+      if (data.updated && data.data) {
+        // 直接更新 workflowData 以立即反映在左侧内容区
+        set((state) => ({
+          workflowData: state.workflowData ? {
+            ...state.workflowData,
+            ...data.data,
+          } : data.data,
+          status: data.status || state.status,
+          isLoading: false,
+        }))
+      } else {
+        set({ isLoading: false })
+      }
       
       // 添加AI回复
       if (data.response) {
-        get().addMessage('assistant', data.response, status?.current_stage)
+        get().addMessage('assistant', data.response, data.current_stage || status?.current_stage)
       }
       
-      // 如果有数据更新，刷新数据
+      // 如果有数据更新，也刷新确保数据同步
       if (data.updated) {
         await get().refreshData()
-        get().addMessage('system', '已根据你的要求更新内容', status?.current_stage)
       }
       
     } catch (error: any) {

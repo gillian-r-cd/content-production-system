@@ -25,6 +25,7 @@ class FieldCreate(BaseModel):
     ai_hint: str = ""
     order: int = 0  # 生成顺序
     depends_on: Optional[List[str]] = None  # 依赖的字段名列表
+    clarification_prompt: str = ""  # 生成前询问用户的问题
     
     def to_field_definition(self) -> FieldDefinition:
         """转换为FieldDefinition（字段名映射）"""
@@ -36,6 +37,7 @@ class FieldCreate(BaseModel):
             ai_hint=self.ai_hint,
             order=self.order,
             depends_on=self.depends_on or [],
+            clarification_prompt=self.clarification_prompt,
         )
 
 
@@ -55,6 +57,7 @@ class FieldResponse(BaseModel):
     ai_hint: str
     order: int = 0
     depends_on: List[str] = []
+    clarification_prompt: str = ""  # 生成前询问用户的问题
     
     @classmethod
     def from_field_definition(cls, f: FieldDefinition) -> "FieldResponse":
@@ -67,6 +70,7 @@ class FieldResponse(BaseModel):
             ai_hint=f.ai_hint or "",
             order=f.order if hasattr(f, 'order') else 0,
             depends_on=f.depends_on if hasattr(f, 'depends_on') else [],
+            clarification_prompt=f.clarification_prompt if hasattr(f, 'clarification_prompt') else "",
         )
 
 

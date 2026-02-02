@@ -3,6 +3,8 @@
 # 主要类：BaseModel
 # 主要方法：to_yaml(), from_yaml(), save(), load()
 
+from __future__ import annotations
+
 from abc import ABC
 from datetime import datetime
 from pathlib import Path
