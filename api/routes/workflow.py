@@ -357,6 +357,76 @@ async def continue_workflow(workflow_id: str):
     return build_status(workflow_id, state, orchestrator.config)
 
 
+@router.post("/{workflow_id}/generate-fields")
+async def generate_fields(workflow_id: str):
+    """
+    生成内涵字段
+    
+    专门用于内涵生产阶段的字段生成，不依赖当前项目状态。
+    会自动回退到 core_production 阶段并开始生成。
+    """
+    state, orchestrator = await ensure_workflow_loaded(workflow_id)
+    
+    # 确保有 content_core
+    if not state.content_core:
+        raise HTTPException(status_code=400, detail="请先完成设计方案选择")
+    
+    # 确保有选中的方案
+    if state.content_core.selected_scheme_index is None:
+        raise HTTPException(status_code=400, detail="请先选择设计方案")
+    
+    # 确保有 field_schema
+    if not state.field_schema:
+        from core.models.field_schema import create_default_field_schema
+        state.field_schema = create_default_field_schema()
+    
+    # 确保字段列表已初始化
+    if not state.content_core.fields:
+        from core.models import ContentField
+        for field_def in state.field_schema.get_ordered_fields():
+            state.content_core.fields.append(ContentField(
+                id=field_def.id or f"field_{len(state.content_core.fields)+1}",
+                name=field_def.name,
+                status="pending",
+            ))
+    
+    # 获取待生成的字段
+    pending_fields = state.content_core.get_pending_fields()
+    
+    if not pending_fields:
+        return {
+            "success": True,
+            "message": "所有字段已生成完成",
+            "generated_count": 0,
+            "status": build_status(workflow_id, state, orchestrator.config).model_dump(),
+        }
+    
+    # 强制设置为 core_production 阶段
+    state.current_stage = "core_production"
+    state.project.status = "core_production"
+    state.waiting_for_input = False
+    
+    # 生成字段（每次调用生成一个）
+    state = orchestrator.run_stage(state, {})
+    
+    # 更新内存和保存
+    _active_workflows[workflow_id] = state
+    orchestrator.save_state(state)
+    
+    # 检查生成结果
+    current_pending = state.content_core.get_pending_fields()
+    generated_count = len(pending_fields) - len(current_pending)
+    
+    return {
+        "success": True,
+        "message": f"生成了 {generated_count} 个字段",
+        "generated_count": generated_count,
+        "remaining_count": len(current_pending),
+        "current_stage": state.current_stage,
+        "status": build_status(workflow_id, state, orchestrator.config).model_dump(),
+    }
+
+
 @router.post("/load/{project_id}")
 async def load_project(project_id: str):
     """
@@ -685,6 +755,90 @@ async def update_field(workflow_id: str, request: UpdateFieldRequest):
         "success": True,
         "stage": request.stage,
         "field": request.field,
+    }
+
+
+class ChangeSchemaRequest(BaseModel):
+    """更换字段模板请求"""
+    schema_id: str
+    force: bool = False  # 是否强制更换（会重置内涵生产数据）
+
+
+@router.post("/{workflow_id}/change-schema")
+async def change_field_schema(workflow_id: str, request: ChangeSchemaRequest):
+    """
+    更换项目的字段模板
+    
+    如果项目已有内涵生产数据，需要 force=True 确认重置
+    """
+    state, orchestrator = await ensure_workflow_loaded(workflow_id)
+    
+    # 检查是否有已生成的内涵数据需要重置
+    has_production_data = (
+        state.content_core and 
+        (state.content_core.fields or state.content_core.selected_scheme_index is not None)
+    )
+    
+    if has_production_data and not request.force:
+        return {
+            "success": False,
+            "need_confirm": True,
+            "message": "项目已有内涵生产数据，更换模板将重置这些数据。请设置 force=True 确认。",
+            "current_fields": [f.name for f in state.content_core.fields] if state.content_core else [],
+        }
+    
+    # 加载新的字段模板
+    new_schema = load_field_schema(request.schema_id)
+    if not new_schema:
+        raise HTTPException(status_code=404, detail=f"字段模板 {request.schema_id} 不存在")
+    
+    # 如果有数据需要重置，先创建版本备份
+    if has_production_data:
+        version_manager.create_version(
+            project_id=workflow_id,
+            trigger_stage="core_production",
+            trigger_action="change_schema",
+            description=f"更换字段模板为 {new_schema.name}",
+            stages_to_backup=["core_design", "extension"],
+        )
+        
+        # 重置内涵生产数据
+        if state.content_core:
+            state.content_core.fields = []
+            state.content_core.selected_scheme_index = None
+            state.content_core.status = "scheme_selection"
+        state.content_extension = None
+        
+        # 回退项目状态到内涵生产阶段
+        state.current_stage = "core_production"
+        state.project.status = "core_production"
+        state.waiting_for_input = False
+    
+    # 更新字段模板
+    state.field_schema = new_schema
+    state.project.field_schema_id = request.schema_id
+    
+    # 如果有 content_core，根据新模板初始化字段列表
+    if state.content_core:
+        from core.models import ContentField
+        state.content_core.field_schema_id = request.schema_id
+        for field_def in new_schema.get_ordered_fields():
+            state.content_core.fields.append(ContentField(
+                id=field_def.id or f"field_{len(state.content_core.fields)+1}",
+                name=field_def.name,
+                status="pending",
+            ))
+    
+    # 更新内存和保存
+    _active_workflows[workflow_id] = state
+    orchestrator.save_state(state)
+    
+    return {
+        "success": True,
+        "schema_id": request.schema_id,
+        "schema_name": new_schema.name,
+        "field_count": len(new_schema.fields),
+        "fields": [f.name for f in new_schema.get_ordered_fields()],
     }
 
 

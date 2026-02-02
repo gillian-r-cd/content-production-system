@@ -602,7 +602,7 @@ class Orchestrator:
             state.project.status = "core_design"
             self._emit("stage_changed", {"stage": "core_design"})
             # 自动开始生成设计方案
-            return self._run_core_design_stage(state, {"action": "generate"})
+            return self._run_core_design_stage(state, {"action": "generate_schemes"})
         
         elif callback == "scheme_selection":
             scheme_index = int(input_data.get("answer", "1")) - 1
@@ -745,14 +745,35 @@ class Orchestrator:
         current_stage = project.status
         waiting_for_input = False
         input_prompt = None
+        input_callback = None
         
         if current_stage == "draft":
             current_stage = "intent"
             waiting_for_input = True
             input_prompt = "请描述你想要生产的内容"
-        elif current_stage == "intent" and not intent:
-            waiting_for_input = True
-            input_prompt = "请描述你想要生产的内容"
+            input_callback = "intent_input"
+        elif current_stage == "intent":
+            if not intent:
+                waiting_for_input = True
+                input_prompt = "请描述你想要生产的内容"
+                input_callback = "intent_input"
+            else:
+                # 意图已完成，等待确认
+                waiting_for_input = True
+                input_prompt = "意图分析已完成，请确认后进入消费者调研阶段。"
+                input_callback = "confirm_intent"
+        elif current_stage == "research":
+            if consumer_research:
+                # 调研已完成，等待确认
+                waiting_for_input = True
+                input_prompt = "消费者调研已完成，请确认后进入内涵设计阶段。"
+                input_callback = "confirm_research"
+        elif current_stage == "core_design":
+            if content_core and content_core.design_schemes and content_core.selected_scheme_index is None:
+                # 方案已生成但未选择
+                waiting_for_input = True
+                input_prompt = "请选择一个设计方案"
+                input_callback = "scheme_selection"
         elif current_stage == "completed":
             # 项目已完成，不需要输入
             waiting_for_input = False
@@ -770,6 +791,7 @@ class Orchestrator:
             content_extension=content_extension,
             waiting_for_input=waiting_for_input,
             input_prompt=input_prompt,
+            input_callback=input_callback,
         )
         
         return state

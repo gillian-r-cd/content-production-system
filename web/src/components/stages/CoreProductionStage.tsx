@@ -1,15 +1,23 @@
 // web/src/components/stages/CoreProductionStage.tsx
 // 内涵生产阶段
-// 功能：显示字段生产进度，支持编辑生成的内容
+// 功能：显示字段生产进度，支持编辑生成的内容，支持更换字段模板
 
 import { useState, useEffect } from 'react'
 import { 
   FileText, Check, Loader2, Edit3, Save, X, 
-  RefreshCw, ChevronDown, ChevronRight, AlertCircle
+  RefreshCw, ChevronDown, ChevronRight, AlertCircle,
+  Settings, AlertTriangle
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useWorkflowStore } from '@/stores/workflowStore'
 import apiClient from '@/api/client'
+
+interface FieldSchemaInfo {
+  id: string
+  name: string
+  description: string
+  field_count: number
+}
 
 interface ContentField {
   name: string
@@ -26,8 +34,15 @@ export default function CoreProductionStage() {
   const [isEditing, setIsEditing] = useState(false)
   const [editContent, setEditContent] = useState('')
   const [isRegenerating, setIsRegenerating] = useState(false)
+  
+  // 字段模板更换相关
+  const [fieldSchemas, setFieldSchemas] = useState<FieldSchemaInfo[]>([])
+  const [showChangeSchemaDialog, setShowChangeSchemaDialog] = useState(false)
+  const [newSchemaId, setNewSchemaId] = useState<string | null>(null)
+  const [isChangingSchema, setIsChangingSchema] = useState(false)
 
   const contentCore = workflowData?.content_core
+  const currentSchemaId = contentCore?.field_schema_id
   const selectedSchemeIndex = contentCore?.selected_scheme_index
   const selectedScheme = contentCore?.design_schemes?.[selectedSchemeIndex ?? 0]
   
@@ -58,24 +73,87 @@ export default function CoreProductionStage() {
       setSelectedField(defaultFields[0].name)
     }
   }, [defaultFields.length])
+  
+  // 加载可用的字段模板
+  useEffect(() => {
+    const fetchSchemas = async () => {
+      try {
+        const { data } = await apiClient.get('/schemas')
+        const schemas = data.map((s: any) => ({
+          id: s.id,
+          name: s.name,
+          description: s.description || '',
+          field_count: s.fields?.length || 0,
+        }))
+        setFieldSchemas(schemas)
+      } catch (error) {
+        console.warn('Failed to load field schemas:', error)
+      }
+    }
+    fetchSchemas()
+  }, [])
+  
+  // 更换字段模板
+  const handleChangeSchema = async () => {
+    if (!workflowId || !newSchemaId) return
+    
+    setIsChangingSchema(true)
+    try {
+      const { data } = await apiClient.post(`/workflow/${workflowId}/change-schema`, {
+        schema_id: newSchemaId,
+        force: true,
+      })
+      
+      if (data.success) {
+        setShowChangeSchemaDialog(false)
+        setNewSchemaId(null)
+        await refreshData()
+      }
+    } catch (error: any) {
+      console.error('更换模板失败:', error)
+      alert(`更换模板失败: ${error.response?.data?.detail || error.message}`)
+    }
+    setIsChangingSchema(false)
+  }
+  
+  // 当前使用的模板名称
+  const currentSchemaName = currentSchemaId 
+    ? fieldSchemas.find(s => s.id === currentSchemaId)?.name || currentSchemaId 
+    : '默认模板'
 
   const completedCount = defaultFields.filter(f => f.status === 'completed').length
   const totalCount = defaultFields.length
 
+  const [isGenerating, setIsGenerating] = useState(false)
+  
   const handleStartGeneration = async () => {
-    if (!workflowId) return
+    if (!workflowId || isGenerating) return
+    
+    setIsGenerating(true)
     
     try {
-      // 触发继续生成
-      await apiClient.post(`/workflow/${workflowId}/continue`)
-      await refreshData()
-    } catch (error: any) {
-      console.error('触发生成失败:', error)
-      // 如果是400错误（需要用户输入），可能是正常的
-      if (error.response?.status !== 400) {
-        alert(`触发生成失败: ${error.response?.data?.detail || error.message}`)
+      // 使用专门的字段生成 API
+      const { data } = await apiClient.post(`/workflow/${workflowId}/generate-fields`)
+      
+      if (data.success) {
+        await refreshData()
+        
+        // 如果还有待生成的字段，继续生成
+        if (data.remaining_count > 0) {
+          // 延迟后继续下一个字段
+          setTimeout(() => {
+            setIsGenerating(false)
+            handleStartGeneration()
+          }, 500)
+          return // 不要设置 isGenerating = false
+        }
       }
+    } catch (error: any) {
+      console.error('生成失败:', error)
+      alert(`生成失败: ${error.response?.data?.detail || error.message}`)
     }
+    
+    setIsGenerating(false)
   }
 
   const handleRegenerate = async (fieldName: string) => {
@@ -173,6 +251,21 @@ export default function CoreProductionStage() {
             </p>
           </div>
         )}
+        
+        {/* 当前字段模板 + 更换按钮 */}
+        <div className="p-3 border-b flex items-center justify-between">
+          <div className="flex-1 min-w-0">
+            <p className="text-xs text-muted-foreground">字段模板</p>
+            <p className="text-sm font-medium truncate">{currentSchemaName}</p>
+          </div>
+          <button
+            onClick={() => setShowChangeSchemaDialog(true)}
+            className="p-1.5 hover:bg-muted rounded"
+            title="更换字段模板"
+          >
+            <Settings className="w-4 h-4 text-muted-foreground" />
+          </button>
+        </div>
 
         {/* 字段列表 */}
         <div className="flex-1 overflow-auto">
@@ -204,10 +297,10 @@ export default function CoreProductionStage() {
           {completedCount < totalCount && (
             <button
               onClick={handleStartGeneration}
-              disabled={isLoading}
+              disabled={isLoading || isGenerating}
               className="w-full px-4 py-3 bg-primary text-primary-foreground rounded-lg font-medium text-sm hover:bg-primary/90 disabled:opacity-50 flex items-center justify-center gap-2"
             >
-              {isLoading ? (
+              {isLoading || isGenerating ? (
                 <><Loader2 className="w-4 h-4 animate-spin" /> 生成中...</>
               ) : (
                 <>开始生成内容</>
@@ -334,6 +427,54 @@ export default function CoreProductionStage() {
           </div>
         )}
       </div>
+      
+      {/* 更换字段模板对话框 */}
+      {showChangeSchemaDialog && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+          <div className="bg-background rounded-lg shadow-lg max-w-md w-full mx-4 p-6">
+            <div className="flex items-center gap-3 mb-4">
+              <AlertTriangle className="w-6 h-6 text-amber-500" />
+              <h3 className="font-semibold text-lg">更换字段模板</h3>
+            </div>
+            
+            <p className="text-muted-foreground mb-4">
+              更换字段模板将重置所有已生成的内容。系统会自动创建当前版本的备份。
+            </p>
+            
+            <div className="mb-4">
+              <label className="text-sm font-medium block mb-2">选择新模板</label>
+              <select
+                value={newSchemaId || ''}
+                onChange={(e) => setNewSchemaId(e.target.value || null)}
+                className="w-full p-2 border rounded focus:outline-none focus:ring-2 focus:ring-primary"
+              >
+                <option value="">请选择模板...</option>
+                {fieldSchemas.map(schema => (
+                  <option key={schema.id} value={schema.id}>
+                    {schema.name} ({schema.field_count} 个字段)
+                  </option>
+                ))}
+              </select>
+            </div>
+            
+            <div className="flex gap-3 justify-end">
+              <button
+                onClick={() => { setShowChangeSchemaDialog(false); setNewSchemaId(null); }}
+                className="px-4 py-2 text-sm bg-muted rounded hover:bg-muted/80"
+              >
+                取消
+              </button>
+              <button
+                onClick={handleChangeSchema}
+                disabled={!newSchemaId || isChangingSchema}
+                className="px-4 py-2 text-sm bg-amber-500 text-white rounded hover:bg-amber-600 disabled:opacity-50"
+              >
+                {isChangingSchema ? '处理中...' : '确认更换'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
