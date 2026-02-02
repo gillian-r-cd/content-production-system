@@ -1,0 +1,45 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+.venv/
+ENV/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Logs
+*.log
+logs/
+
+# Local storage (项目数据，不上传)
+storage/
+
+# Environment
+.env
+.env.local
+*.env
+
+# Node.js (前端)
+web/node_modules/
+web/dist/
+web/.cache/
+
+# Test files
+test_*.py
+*.test.py
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Temp
+*.tmp
+*.temp

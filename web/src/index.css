@@ -1,0 +1,65 @@
+/* web/src/index.css */
+/* 全局样式 */
+/* 功能：TailwindCSS导入、全局CSS变量、基础样式 */
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 0 0% 100%;
+    --foreground: 210 11% 13%;
+    --card: 0 0% 100%;
+    --card-foreground: 210 11% 13%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 210 11% 13%;
+    --primary: 214 83% 51%;
+    --primary-foreground: 0 0% 100%;
+    --secondary: 210 7% 97%;
+    --secondary-foreground: 210 11% 13%;
+    --muted: 210 7% 97%;
+    --muted-foreground: 210 7% 39%;
+    --accent: 210 7% 97%;
+    --accent-foreground: 210 11% 13%;
+    --destructive: 4 74% 56%;
+    --destructive-foreground: 0 0% 100%;
+    --border: 214 15% 91%;
+    --input: 214 15% 91%;
+    --ring: 214 83% 51%;
+    --radius: 0.5rem;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+  body {
+    @apply bg-background text-foreground;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  }
+}
+
+/* 自定义滚动条 */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: #f1f1f1;
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #c1c1c1;
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #a1a1a1;
+}
+
+
+

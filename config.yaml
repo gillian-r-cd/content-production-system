@@ -1,0 +1,60 @@
+# config.yaml
+# 内容生产系统 - 全局配置
+# 功能：定义AI模型、存储路径、编排参数等全局设置
+
+# === AI配置 ===
+ai:
+  # provider: openai (目前只支持OpenAI兼容API)
+  provider: "openai"
+  
+  # 模型名称 - 支持任意OpenAI兼容模型
+  # 例如: gpt-4, gpt-4-turbo, gpt-5.1, 或自定义模型名
+  model: "gpt-5.1"
+  
+  # API密钥从环境变量读取（不要在这里写明文）
+  # api_key从.env文件的OPENAI_API_KEY读取
+  
+  # 可选：自定义API Base URL（用于代理或国内中转）
+  # base_url从.env文件的OPENAI_BASE_URL读取，为空则使用官方地址
+  
+  # 温度参数
+  temperature:
+    default: 0.7       # 常规生成
+    creative: 0.9      # 方案生成（需要多样性）
+    precise: 0.3       # 格式化输出（需要稳定）
+
+# === 存储配置 ===
+storage:
+  base_path: "./storage"
+  creator_profiles_dir: "creator_profiles"
+  projects_dir: "projects"
+
+# === 流程编排配置 ===
+orchestrator:
+  # 自迭代最大循环次数
+  max_loops: 3
+  
+  # 循环退出阈值（当问题数低于阈值时退出循环）
+  loop_exit_threshold:
+    critical_issues: 0    # 严重问题必须为0
+    major_issues: 2       # 主要问题允许2个以内
+  
+  # 批量生成方案数
+  alternatives_count: 3
+
+# === 默认值 ===
+defaults:
+  # 新项目的默认深度模式
+  project_depth: "standard"  # light | standard | deep
+
+# === Prompt模板配置 ===
+prompts:
+  templates_dir: "./config/prompts"
+  file_extension: ".md.j2"
+
+# === FieldSchema模板配置 ===
+field_schemas:
+  templates_dir: "./config/field_schemas"
+
+
+

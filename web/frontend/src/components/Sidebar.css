@@ -1,0 +1,129 @@
+.sidebar {
+  width: 220px;
+  min-width: 180px;
+  max-width: 280px;
+  background: var(--bg-secondary);
+  border-right: 1px solid var(--border-color);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.sidebar-header {
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.sidebar-header h2 {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin: 0;
+}
+
+.stage-list {
+  flex: 1;
+  padding: 12px;
+  overflow-y: auto;
+}
+
+.stage-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 10px 12px;
+  border: none;
+  background: transparent;
+  border-radius: 8px;
+  cursor: pointer;
+  text-align: left;
+  transition: all 0.2s;
+  margin-bottom: 4px;
+}
+
+.stage-item:hover:not(:disabled) {
+  background: var(--bg-hover);
+}
+
+.stage-item.active {
+  background: var(--primary-light);
+}
+
+.stage-item:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.stage-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+}
+
+.stage-icon.status-pending {
+  color: var(--text-muted);
+}
+
+.stage-icon.status-in_progress {
+  color: var(--primary);
+}
+
+.stage-icon.status-completed {
+  color: var(--success);
+}
+
+.stage-icon.status-blocked {
+  color: var(--error);
+}
+
+.stage-name {
+  font-size: 14px;
+  color: var(--text-primary);
+}
+
+.stage-item.active .stage-name {
+  font-weight: 500;
+  color: var(--primary);
+}
+
+.sidebar-footer {
+  padding: 16px 20px;
+  border-top: 1px solid var(--border-color);
+}
+
+.progress-info {
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+
+.progress-label {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.progress-value {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.progress-bar {
+  height: 4px;
+  background: var(--bg-tertiary);
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+.progress-fill {
+  height: 100%;
+  background: var(--primary);
+  border-radius: 2px;
+  transition: width 0.3s ease;
+}
+
